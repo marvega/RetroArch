@@ -168,6 +168,7 @@ typedef struct
    uint8_t flags;
    char server_address_deferred[256];
    char server_session_deferred[32];
+   char client_password[NETPLAY_PASS_LEN];
 } net_driver_state_t;
 
 net_driver_state_t *networking_state_get_ptr(void);
@@ -207,6 +208,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session);
 bool init_netplay_deferred(const char *server, unsigned port,
    const char *mitm_session);
 void deinit_netplay(void);
+void netplay_set_client_password(const char *password);
 
 bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data);
 

@@ -1055,36 +1055,40 @@ static bool netplay_handshake_init_send(netplay_t *netplay,
    return true;
 }
 
-#ifdef HAVE_MENU
-static void handshake_password(void *userdata, const char *line)
+static bool netplay_handshake_send_password(netplay_t *netplay,
+      struct netplay_connection *connection, const char *password)
 {
    size_t _len;
    struct password_buf_s password_buf;
-   char password[8+NETPLAY_PASS_LEN]; /* 8 for salt, 128 for password */
+   char buf[8+NETPLAY_PASS_LEN]; /* 8 for salt, 128 for password */
    char hash[NETPLAY_PASS_HASH_LEN+1]; /* + NULL terminator */
-   struct netplay_connection *connection;
-   net_driver_state_t *net_st            = &networking_driver_st;
-   netplay_t *netplay                    = net_st->data;
+
+   _len = snprintf(buf, sizeof(buf), "%08lX", (unsigned long)connection->salt);
+   if (password && *password)
+      _len += strlcpy(buf + _len, password, sizeof(buf) - _len);
+
+   password_buf.cmd[0] = htonl(NETPLAY_CMD_PASSWORD);
+   password_buf.cmd[1] = htonl(sizeof(password_buf.password));
+   sha256_hash(hash, (uint8_t *) buf, _len);
+   memcpy(password_buf.password, hash, NETPLAY_PASS_HASH_LEN);
+
+   return netplay_send(&connection->send_packet_buffer, connection->fd,
+            &password_buf, sizeof(password_buf))
+      && netplay_send_flush(&connection->send_packet_buffer,
+            connection->fd, false);
+}
+
+#ifdef HAVE_MENU
+static void handshake_password(void *userdata, const char *line)
+{
+   net_driver_state_t *net_st = &networking_driver_st;
+   netplay_t *netplay         = net_st->data;
 
    if (!netplay)
       return;
 
-   connection = &netplay->connections[0];
-   _len       = snprintf(password, sizeof(password),
-         "%08lX", (unsigned long)connection->salt);
-   if (line && *line)
-      _len += strlcpy(password         + _len,
-                      line,
-                      sizeof(password) - _len);
-
-   password_buf.cmd[0] = htonl(NETPLAY_CMD_PASSWORD);
-   password_buf.cmd[1] = htonl(sizeof(password_buf.password));
-   sha256_hash(hash, (uint8_t *) password, _len);
-   memcpy(password_buf.password, hash, NETPLAY_PASS_HASH_LEN);
-
    /* We have no way to handle an error here, so we'll let the next function error out */
-   if (netplay_send(&connection->send_packet_buffer, connection->fd, &password_buf, sizeof(password_buf)))
-      netplay_send_flush(&connection->send_packet_buffer, connection->fd, false);
+   netplay_handshake_send_password(netplay, &netplay->connections[0], line);
 
    menu_input_dialog_end();
    retroarch_menu_running_finished(false);
@@ -1359,8 +1363,11 @@ bool netplay_handshake_init(netplay_t *netplay,
 
    if (!(netplay->flags & NETPLAY_FLAG_IS_SERVER))
    {
+      net_driver_state_t *net_st = &networking_driver_st;
+      const char *cli_password   = net_st->client_password;
+
       /* If a password is demanded, ask for it */
-      if ((connection->salt = ntohl(header[3])))
+      if ((connection->salt = ntohl(header[3])) && !*cli_password)
       {
 #ifdef HAVE_MENU
          menu_input_ctx_line_t line = {0};
@@ -1375,6 +1382,12 @@ bool netplay_handshake_init(netplay_t *netplay,
       }
 
       if (!netplay_handshake_nick(netplay, connection))
+         return false;
+
+      /* The host reads the nick before the password. */
+      if (     connection->salt && *cli_password
+            && !netplay_handshake_send_password(netplay, connection,
+                  cli_password))
          return false;
    }
 
@@ -8825,6 +8838,14 @@ static size_t retrieve_client_count(netplay_t *netplay,
    }
 
    return r;
+}
+
+void netplay_set_client_password(const char *password)
+{
+   net_driver_state_t *net_st = &networking_driver_st;
+
+   strlcpy(net_st->client_password, password ? password : "",
+      sizeof(net_st->client_password));
 }
 
 bool init_netplay_deferred(const char *server, unsigned port, const char *mitm_session)

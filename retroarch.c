@@ -342,7 +342,8 @@ enum
    RA_OPT_SET_SHADER,
    RA_OPT_DATABASE_SCAN,
    RA_OPT_ACCESSIBILITY,
-   RA_OPT_LOAD_MENU_ON_ERROR
+   RA_OPT_LOAD_MENU_ON_ERROR,
+   RA_OPT_NETPLAY_PASSWORD
 };
 
 /* DRIVERS */
@@ -7494,6 +7495,8 @@ static void retroarch_print_help(const char *arg0)
          "Connect to netplay server as user 2.\n"
          "      --port=PORT                "
          "Port used to netplay. Default is 55435.\n"
+         "      --netplay-password=PASSWORD "
+         "Password for the netplay host given with --connect.\n"
          "      --mitm-session=ID           "
          "MITM (relay) session ID to join.\n"
          "      --nick=NICK                "
@@ -7831,6 +7834,7 @@ static bool retroarch_parse_input_and_config(
       { "mitm-session",       1, NULL, 'T' },
       { "check-frames",       1, NULL, RA_OPT_CHECK_FRAMES },
       { "port",               1, NULL, RA_OPT_PORT },
+      { "netplay-password",   1, NULL, RA_OPT_NETPLAY_PASSWORD },
 #ifdef HAVE_NETWORK_CMD
       { "command",            1, NULL, RA_OPT_COMMAND },
 #endif
@@ -8312,6 +8316,10 @@ static bool retroarch_parse_input_and_config(
                configuration_set_uint(settings,
                      settings->uints.netplay_port,
                      (int)strtoul(optarg, NULL, 0));
+               break;
+
+            case RA_OPT_NETPLAY_PASSWORD:
+               netplay_set_client_password(optarg);
                break;
 
 #ifdef HAVE_NETWORK_CMD

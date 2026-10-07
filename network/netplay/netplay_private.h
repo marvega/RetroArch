@@ -36,7 +36,6 @@
 #define RARCH_DISCOVERY_PORT 55435
 #define RARCH_DEFAULT_NICK   "Anonymous"
 
-#define NETPLAY_PASS_LEN      128
 #define NETPLAY_PASS_HASH_LEN 64 /* length of a SHA-256 hash */
 
 #define NETPLAY_ANNOUNCE_AFTER 5000000

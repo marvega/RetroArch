@@ -32,6 +32,7 @@
 #endif
 
 #define NETPLAY_NICK_LEN         32
+#define NETPLAY_PASS_LEN         128
 #define NETPLAY_HOST_STR_LEN     32
 #define NETPLAY_HOST_LONGSTR_LEN 256
 
