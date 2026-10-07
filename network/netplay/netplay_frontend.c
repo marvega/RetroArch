@@ -9812,6 +9812,94 @@ void deinit_netplay(void)
    core_unset_netplay_callbacks();
 }
 
+#define NETPLAY_CONNECT_RETRIES          5
+#define NETPLAY_CONNECT_RETRY_DELAY_USEC 2000000
+
+struct netplay_connect_retry
+{
+   char hostname[2*256+16]; /* address|port|session */
+};
+
+static void netplay_connect_retry_handler(retro_task_t *task)
+{
+   task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
+}
+
+static void netplay_connect_retry_callback(retro_task_t *task,
+      void *task_data, void *user_data, const char *error)
+{
+   struct netplay_connect_retry *retry =
+      (struct netplay_connect_retry*)user_data;
+   net_driver_state_t *net_st          = &networking_driver_st;
+
+   /* Skip if the retry was cancelled, netplay started by other
+    * means, or the content is gone. */
+   if (     net_st->connect_attempt
+         && !net_st->data
+         && !(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_ENABLED)
+         && !retroarch_ctl(RARCH_CTL_IS_DUMMY_CORE, NULL))
+   {
+      netplay_driver_ctl(RARCH_NETPLAY_CTL_ENABLE_CLIENT, NULL);
+      command_event(CMD_EVENT_NETPLAY_INIT_DIRECT, retry->hostname);
+   }
+   else
+      net_st->connect_attempt = 0;
+
+   free(retry);
+}
+
+/* Schedules another attempt against the same host after a failed
+ * connect; false once the attempts are used up. */
+static bool netplay_connect_retry(const char *server, unsigned port,
+      const char *mitm_session)
+{
+   size_t _len;
+   char msg[128];
+   retro_task_t *task;
+   struct netplay_connect_retry *retry;
+   net_driver_state_t *net_st = &networking_driver_st;
+
+   if (net_st->connect_attempt >= NETPLAY_CONNECT_RETRIES)
+   {
+      net_st->connect_attempt = 0;
+      return false;
+   }
+
+   retry = (struct netplay_connect_retry*)calloc(1, sizeof(*retry));
+   if (!retry)
+      return false;
+   task  = task_init();
+   if (!task)
+   {
+      free(retry);
+      return false;
+   }
+
+   _len = snprintf(retry->hostname, sizeof(retry->hostname), "%s|%u",
+      server, port);
+   if (_len < sizeof(retry->hostname) && mitm_session && *mitm_session)
+      snprintf(retry->hostname + _len, sizeof(retry->hostname) - _len,
+         "|%s", mitm_session);
+
+   task->when      = cpu_features_get_time_usec()
+      + NETPLAY_CONNECT_RETRY_DELAY_USEC;
+   task->handler   = netplay_connect_retry_handler;
+   task->callback  = netplay_connect_retry_callback;
+   task->user_data = retry;
+   task_queue_push(task);
+
+   net_st->connect_attempt++;
+
+   snprintf(msg, sizeof(msg),
+      msg_hash_to_str(MSG_NETPLAY_RETRYING_CONNECTION),
+      net_st->connect_attempt, NETPLAY_CONNECT_RETRIES);
+   RARCH_WARN("[Netplay] %s\n", msg);
+   runloop_msg_queue_push(msg, strlen(msg), 1, 180, false, NULL,
+      MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+
+   return true;
+}
+
 bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 {
    netplay_t *netplay;
@@ -9823,6 +9911,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    struct netplay_room *host_room = &net_st->host_room;
    const char *mitm               = NULL;
    enum netplay_modus modus       = NETPLAY_MODUS_INPUT_FRAME_SYNC;
+   bool retrying                  = false;
 
    if (!(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_ENABLED))
       return false;
@@ -9930,9 +10019,15 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       settings->paths.username,
       quirks, modus);
    if (!netplay)
+   {
+      /* The connect itself failed; a host has nothing to retry. */
+      if (server)
+         retrying = netplay_connect_retry(server, port, mitm_session);
       goto failure;
+   }
 
-   net_st->data = netplay;
+   net_st->data            = netplay;
+   net_st->connect_attempt = 0;
 
    if ((netplay->flags & NETPLAY_FLAG_IS_SERVER))
    {
@@ -10001,6 +10096,7 @@ failure:
                     | NET_DRIVER_ST_FLAG_NETPLAY_CLIENT_DEFERRED);
    deinit_netplay();
 
+   if (!retrying)
    {
       const char *_msg = msg_hash_to_str(MSG_NETPLAY_FAILED);
       RARCH_ERR("[Netplay] %s\n", _msg);
@@ -10256,6 +10352,7 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
             break;
          }
          net_st->flags       &= ~NET_DRIVER_ST_FLAG_NETPLAY_ENABLED;
+         net_st->connect_attempt = 0;
 #ifdef HAVE_PRESENCE
          {
             presence_userdata_t userdata;

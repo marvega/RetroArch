@@ -32679,6 +32679,10 @@ MSG_HASH(
    "Failed to initialize netplay."
    )
 MSG_HASH(
+   MSG_NETPLAY_RETRYING_CONNECTION,
+   "Retrying netplay connection (%u/%u)..."
+   )
+MSG_HASH(
    MSG_NETPLAY_UNSUPPORTED,
    "Core does not support netplay."
    )
