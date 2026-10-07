@@ -74,6 +74,9 @@
 #endif
 
 static enum frontend_fork switch_fork_mode = FRONTEND_FORK_NONE;
+#if defined(HAVE_LIBNX) && !defined(IS_SALAMANDER)
+static char switch_return_to[PATH_MAX];
+#endif
 bool platform_switch_has_focus = true;
 
 #ifdef HAVE_LIBNX
@@ -382,6 +385,14 @@ static void frontend_switch_exec(const char *path, bool should_load_game)
          if (content && *content)
             snprintf(args, sizeof(args), "%s \"%s\"", path, content);
       }
+
+      if (*switch_return_to)
+      {
+         /* One quoted token: hbloader only honours a quote that starts an argument. */
+         strlcat(args, " \"--return-to=", sizeof(args));
+         strlcat(args, switch_return_to, sizeof(args));
+         strlcat(args, "\"", sizeof(args));
+      }
 #else
       {
          struct stat sbuff;
@@ -423,6 +434,11 @@ static bool frontend_switch_set_fork(enum frontend_fork fork_mode)
 
    return true;
 }
+
+void frontend_switch_set_return_to(const char *path)
+{
+   strlcpy(switch_return_to, path ? path : "", sizeof(switch_return_to));
+}
 #endif
 
 static void frontend_switch_exitspawn(char *s, size_t len, char *args)
@@ -430,7 +446,11 @@ static void frontend_switch_exitspawn(char *s, size_t len, char *args)
    bool should_load_content = false;
 #ifndef IS_SALAMANDER
    if (switch_fork_mode == FRONTEND_FORK_NONE)
+   {
+      if (*switch_return_to)
+         envSetNextLoad(switch_return_to, switch_return_to);
       return;
+   }
 
    switch (switch_fork_mode)
    {

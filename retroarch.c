@@ -343,8 +343,13 @@ enum
    RA_OPT_DATABASE_SCAN,
    RA_OPT_ACCESSIBILITY,
    RA_OPT_LOAD_MENU_ON_ERROR,
-   RA_OPT_NETPLAY_PASSWORD
+   RA_OPT_NETPLAY_PASSWORD,
+   RA_OPT_RETURN_TO
 };
+
+#ifdef HAVE_LIBNX
+void frontend_switch_set_return_to(const char *path);
+#endif
 
 /* DRIVERS */
 #ifdef HAVE_BLUETOOTH
@@ -7572,6 +7577,12 @@ static void retroarch_print_help(const char *arg0)
          "Enables accessibility for blind users using text-to-speech.\n");
 #endif
 
+#ifdef HAVE_LIBNX
+   strlcpy_append(buf, sizeof(buf), &_len,
+         "      --return-to=PATH           "
+         "Chain-load this NRO when RetroArch exits.\n");
+#endif
+
    strlcpy_append(buf, sizeof(buf), &_len,
          "      --load-menu-on-error       "
          "Open menu instead of quitting if specified core or content fails to load.\n"
@@ -7863,6 +7874,9 @@ static bool retroarch_parse_input_and_config(
       { "entryslot",          1, NULL, 'e' },
 #ifdef HAVE_LIBRETRODB
       { "scan",               1, NULL, RA_OPT_DATABASE_SCAN },
+#endif
+#ifdef HAVE_LIBNX
+      { "return-to",          1, NULL, RA_OPT_RETURN_TO },
 #endif
       { NULL, 0, NULL, 0 }
    };
@@ -8476,6 +8490,12 @@ static bool retroarch_parse_input_and_config(
             case RA_OPT_LOAD_MENU_ON_ERROR:
                rarch_st.flags |= RARCH_FLAGS_CLI_LOAD_MENU_ON_ERR;
                break;
+
+#ifdef HAVE_LIBNX
+            case RA_OPT_RETURN_TO:
+               frontend_switch_set_return_to(optarg);
+               break;
+#endif
             case 'e':
                {
                   char *endptr;
