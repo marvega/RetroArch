@@ -75,7 +75,11 @@
 
 static enum frontend_fork switch_fork_mode = FRONTEND_FORK_NONE;
 #if defined(HAVE_LIBNX) && !defined(IS_SALAMANDER)
-static char switch_return_to[PATH_MAX];
+/* hbloader copies the next NRO path into a 512-byte buffer and the
+ * argument string into a 2048-byte one (nx-hbloader main.c). */
+#define SWITCH_NEXTLOAD_PATH_MAX 512
+#define SWITCH_NEXTLOAD_ARGV_MAX 2048
+static char switch_return_to[SWITCH_NEXTLOAD_PATH_MAX];
 #endif
 bool platform_switch_has_focus = true;
 
@@ -389,9 +393,15 @@ static void frontend_switch_exec(const char *path, bool should_load_game)
       if (*switch_return_to)
       {
          /* One quoted token: hbloader only honours a quote that starts an argument. */
-         strlcat(args, " \"--return-to=", sizeof(args));
-         strlcat(args, switch_return_to, sizeof(args));
-         strlcat(args, "\"", sizeof(args));
+         if (     strlen(args) + strlen(switch_return_to)
+               + STRLEN_CONST(" \"--return-to=\"") < SWITCH_NEXTLOAD_ARGV_MAX)
+         {
+            strlcat(args, " \"--return-to=", sizeof(args));
+            strlcat(args, switch_return_to, sizeof(args));
+            strlcat(args, "\"", sizeof(args));
+         }
+         else
+            RARCH_WARN("[Switch] Fork arguments too long, --return-to dropped.\n");
       }
 #else
       {
@@ -437,6 +447,12 @@ static bool frontend_switch_set_fork(enum frontend_fork fork_mode)
 
 void frontend_switch_set_return_to(const char *path)
 {
+   if (path && strlen(path) >= sizeof(switch_return_to))
+   {
+      RARCH_ERR("[Switch] --return-to path longer than %u bytes, ignored.\n",
+            (unsigned)(sizeof(switch_return_to) - 1));
+      path = NULL;
+   }
    strlcpy(switch_return_to, path ? path : "", sizeof(switch_return_to));
 }
 #endif
@@ -448,7 +464,12 @@ static void frontend_switch_exitspawn(char *s, size_t len, char *args)
    if (switch_fork_mode == FRONTEND_FORK_NONE)
    {
       if (*switch_return_to)
-         envSetNextLoad(switch_return_to, switch_return_to);
+      {
+         /* Quoted: hbloader splits argv on spaces. */
+         char argv0[SWITCH_NEXTLOAD_PATH_MAX + 2];
+         snprintf(argv0, sizeof(argv0), "\"%s\"", switch_return_to);
+         envSetNextLoad(switch_return_to, argv0);
+      }
       return;
    }
 
