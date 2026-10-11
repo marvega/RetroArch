@@ -347,10 +347,6 @@ static void frontend_switch_deinit(void *data)
       clkrstExit();
    }
 
-#if defined(SWITCH) && defined(NXLINK)
-   socketExit();
-#endif
-
    if (psmInitialized)
        psmExit();
 
@@ -630,6 +626,13 @@ error:
 static void frontend_switch_shutdown(bool unused)
 {
    (void)unused;
+#if defined(HAVE_LIBNX) && defined(SWITCH) && defined(NXLINK)
+   /* Here rather than in frontend_switch_deinit: main_exit() runs
+    * net_http_deinit() between the two, and closing a pooled HTTP
+    * connection (a netplay host's lobby announce leaves one) after
+    * socketExit() faults in close(). */
+   socketExit();
+#endif
 }
 
 /* runloop_get_system_info isnt initialized that early.. */
