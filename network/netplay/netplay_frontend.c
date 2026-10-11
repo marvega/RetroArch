@@ -11133,11 +11133,32 @@ static void gfx_widget_netplay_ping_iterate(void *user_data,
    }
 #endif
 
-   if (!(netplay->flags & NETPLAY_FLAG_IS_SERVER) &&
-         netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED)
-      net_st->latest_ping       = netplay->connections[0].ping;
+   if (!(netplay->flags & NETPLAY_FLAG_IS_SERVER))
+   {
+      if (netplay->self_mode >= NETPLAY_CONNECTION_CONNECTED)
+         net_st->latest_ping    = netplay->connections[0].ping;
+      else
+         net_st->latest_ping    = -1;
+   }
    else
-      net_st->latest_ping       = -1;
+   {
+      /* The host pings each client back; show the slowest player. */
+      size_t i;
+      int ping                  = -1;
+
+      for (i = 0; i < netplay->connections_size; i++)
+      {
+         struct netplay_connection *connection = &netplay->connections[i];
+
+         if (     (connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
+               && (connection->mode == NETPLAY_CONNECTION_PLAYING
+                  || connection->mode == NETPLAY_CONNECTION_SLAVE)
+               && connection->ping > ping)
+            ping                = connection->ping;
+      }
+
+      net_st->latest_ping       = ping;
+   }
 }
 
 static void gfx_widget_netplay_ping_frame(void *data, void *userdata)
