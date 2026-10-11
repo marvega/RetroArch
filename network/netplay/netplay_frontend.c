@@ -7140,13 +7140,11 @@ static void netplay_relay_fallback_handler(retro_task_t *task)
    netplay_driver_ctl(RARCH_NETPLAY_CTL_ENABLE_SERVER, NULL);
    net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_ACTIVE;
 
-   if (command_event(CMD_EVENT_NETPLAY_INIT, NULL))
-   {
-      /* The content is long loaded: announce the relay room now. */
-      if (net_st->data)
-         net_st->data->next_announce = cpu_features_get_time_usec();
-   }
-   else
+   /* The relay room is announced NETPLAY_ANNOUNCE_AFTER from now, as
+    * set by host setup: the lobby keys a room on nick, IP and port and
+    * refuses a second update within 5 s, and a relay on the same port
+    * as the direct room makes this announce such an update. */
+   if (!command_event(CMD_EVENT_NETPLAY_INIT, NULL))
    {
       /* Relay unreachable: host directly again, as before. */
       RARCH_WARN("[Netplay] Relay fallback failed; hosting in direct mode.\n");
