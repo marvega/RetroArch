@@ -7070,6 +7070,124 @@ static void netplay_handle_slaves(netplay_t *netplay)
    }
 }
 
+/* ---- relay fallback (netplay_relay_fallback) ----
+ *
+ * A host announced in direct mode that the internet cannot reach -
+ * the lobby server answers connectable=0, UPnP failed, or UPnP found a
+ * private or shared external address - closes the direct session and
+ * hosts again through the custom relay server.  Once per hosting
+ * session, only while nobody has connected, and only with a custom
+ * relay configured.  The switch runs from a main-thread task, never
+ * from inside the HTTP or NAT callback that noticed the problem. */
+
+enum netplay_relay_fallback_state
+{
+   NETPLAY_RELAY_FALLBACK_NONE = 0,
+   NETPLAY_RELAY_FALLBACK_PENDING,
+   NETPLAY_RELAY_FALLBACK_ACTIVE,
+   NETPLAY_RELAY_FALLBACK_SPENT
+};
+
+static bool netplay_relay_fallback_eligible(netplay_t *netplay)
+{
+   size_t i;
+   char addr[256];
+   unsigned port        = 0;
+   settings_t *settings = config_get_ptr();
+
+   if (   !settings->bools.netplay_relay_fallback
+       || !netplay
+       || !(netplay->flags & NETPLAY_FLAG_IS_SERVER)
+       ||  netplay->mitm_handler)
+      return false;
+
+   /* Someone reached us already, or is still handshaking. */
+   for (i = 0; i < netplay->connections_size; i++)
+      if (netplay->connections[i].flags & NETPLAY_CONN_FLAG_ACTIVE)
+         return false;
+
+   addr[0] = '\0';
+   return netplay_decode_hostname(settings->paths.netplay_custom_mitm_server,
+         addr, &port, NULL, sizeof(addr)) && *addr;
+}
+
+static void netplay_relay_fallback_handler(retro_task_t *task)
+{
+   const char *_msg;
+   net_driver_state_t *net_st = &networking_driver_st;
+
+   task_set_flags(task, RETRO_TASK_FLG_FINISHED, true);
+
+   /* Hosting stopped or started over meanwhile. */
+   if (net_st->relay_fallback != NETPLAY_RELAY_FALLBACK_PENDING)
+      return;
+
+   if (!netplay_relay_fallback_eligible(net_st->data))
+   {
+      /* A client got in after all: keep the room and announce it. */
+      net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_SPENT;
+      if (net_st->data && (net_st->data->flags & NETPLAY_FLAG_IS_SERVER))
+         net_st->data->next_announce = cpu_features_get_time_usec();
+      return;
+   }
+
+   _msg = msg_hash_to_str(MSG_NETPLAY_RELAY_FALLBACK);
+   RARCH_WARN("[Netplay] %s\n", _msg);
+   runloop_msg_queue_push(_msg, strlen(_msg), 1, 180, false, NULL,
+         MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+
+   deinit_netplay();
+   netplay_driver_ctl(RARCH_NETPLAY_CTL_ENABLE_SERVER, NULL);
+   net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_ACTIVE;
+
+   if (command_event(CMD_EVENT_NETPLAY_INIT, NULL))
+   {
+      /* The content is long loaded: announce the relay room now. */
+      if (net_st->data)
+         net_st->data->next_announce = cpu_features_get_time_usec();
+   }
+   else
+   {
+      /* Relay unreachable: host directly again, as before. */
+      RARCH_WARN("[Netplay] Relay fallback failed; hosting in direct mode.\n");
+      netplay_driver_ctl(RARCH_NETPLAY_CTL_ENABLE_SERVER, NULL);
+      net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_SPENT;
+      command_event(CMD_EVENT_NETPLAY_INIT, NULL);
+   }
+
+#if HAVE_RUNAHEAD
+   /* Not compatible with netplay; deinit_netplay brought it back. */
+   preempt_deinit(runloop_state_get_ptr());
+#endif
+}
+
+/* Queues the move to the relay if this host qualifies; true when it
+ * will happen, so the caller can leave the explaining to it. */
+static bool netplay_relay_fallback_schedule(netplay_t *netplay)
+{
+   retro_task_t *task;
+   net_driver_state_t *net_st = &networking_driver_st;
+
+   if (   net_st->relay_fallback != NETPLAY_RELAY_FALLBACK_NONE
+       || !netplay_relay_fallback_eligible(netplay)
+       || !(task = task_init()))
+      return false;
+
+   task->handler = netplay_relay_fallback_handler;
+   task->flags  |= RETRO_TASK_FLG_MAIN_THREAD | RETRO_TASK_FLG_MUTE;
+   if (!task_queue_push(task))
+   {
+      free(task);
+      return false;
+   }
+
+   net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_PENDING;
+   /* The direct room is going away: stop announcing it. */
+   netplay->next_announce = -1;
+   RARCH_LOG("[Netplay] Direct hosting not reachable; moving to the relay.\n");
+   return true;
+}
+
 /**
  * netplay_announce_nat_traversal
  *
@@ -7110,6 +7228,7 @@ static void netplay_announce_nat_traversal(netplay_t *netplay,
          RARCH_WARN("[Netplay] %s\n", msg);
          runloop_msg_queue_push(msg, strlen(msg), 1, 600, false, NULL,
             MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+         netplay_relay_fallback_schedule(netplay);
       }
    }
    else
@@ -7118,6 +7237,7 @@ static void netplay_announce_nat_traversal(netplay_t *netplay,
       RARCH_ERR("[Netplay] %s\n", msg);
       runloop_msg_queue_push(msg, strlen(msg), 1, 180, false, NULL,
          MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+      netplay_relay_fallback_schedule(netplay);
    }
 }
 
@@ -9018,8 +9138,10 @@ static void netplay_announce_cb(retro_task_t *task, void *task_data,
 
    free(buf);
 
-   /* Warn only on the first announce. */
-   if (!host_room->connectable && first)
+   /* Move to the relay if allowed, else warn only on the first announce. */
+   if (     !host_room->connectable
+         && !netplay_relay_fallback_schedule(net_st->data)
+         && first)
    {
       const char *_msg = msg_hash_to_str(MSG_ROOM_NOT_CONNECTABLE);
       RARCH_WARN("[Netplay] %s\n", msg_hash_to_str(MSG_ROOM_NOT_CONNECTABLE));
@@ -9955,12 +10077,21 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
        * room, which is reset here: carry it across, or the query would
        * be asked again - and waited for - with the answer in hand. */
       char mitm_address[sizeof(host_room->mitm_address)];
-      int  mitm_port = 0;
+      int  mitm_port          = 0;
+      bool use_mitm           = settings->bools.netplay_use_mitm_server;
+      const char *mitm_handle = settings->arrays.netplay_mitm_server;
+
+      /* Direct hosting was not reachable: use the custom relay. */
+      if (net_st->relay_fallback == NETPLAY_RELAY_FALLBACK_ACTIVE)
+      {
+         use_mitm    = true;
+         mitm_handle = "custom";
+      }
+
       mitm_address[0] = '\0';
       if (   netplay_mitm_query_ready()
-          && settings->bools.netplay_use_mitm_server
-          && string_is_equal(settings->arrays.netplay_mitm_server,
-                netplay_mitm_query_handle))
+          && use_mitm
+          && string_is_equal(mitm_handle, netplay_mitm_query_handle))
       {
          strlcpy(mitm_address, host_room->mitm_address, sizeof(mitm_address));
          mitm_port = host_room->mitm_port;
@@ -9974,10 +10105,8 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
       server = NULL;
 
-      if (settings->bools.netplay_use_mitm_server)
+      if (use_mitm)
       {
-         const char *mitm_handle = settings->arrays.netplay_mitm_server;
-
          if (netplay_mitm_query(mitm_handle))
          {
             /* We want to cache the MITM server handle in order to
@@ -10333,6 +10462,7 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          }
          net_st->flags       |=  NET_DRIVER_ST_FLAG_NETPLAY_ENABLED;
          net_st->flags       &= ~NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT;
+         net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_NONE;
          break;
 
       case RARCH_NETPLAY_CTL_ENABLE_CLIENT:
@@ -10343,6 +10473,7 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          }
          net_st->flags       |= NET_DRIVER_ST_FLAG_NETPLAY_ENABLED
                               | NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT;
+         net_st->relay_fallback = NETPLAY_RELAY_FALLBACK_NONE;
          break;
 
       case RARCH_NETPLAY_CTL_DISABLE:
@@ -10353,6 +10484,7 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          }
          net_st->flags       &= ~NET_DRIVER_ST_FLAG_NETPLAY_ENABLED;
          net_st->connect_attempt = 0;
+         net_st->relay_fallback  = NETPLAY_RELAY_FALLBACK_NONE;
 #ifdef HAVE_PRESENCE
          {
             presence_userdata_t userdata;

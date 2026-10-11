@@ -964,6 +964,7 @@ typedef struct settings
       bool netplay_require_slaves;
       bool netplay_nat_traversal;
       bool netplay_use_mitm_server;
+      bool netplay_relay_fallback;
       bool netplay_request_devices[MAX_USERS];
       bool netplay_ping_show;
 

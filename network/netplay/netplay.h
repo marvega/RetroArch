@@ -166,6 +166,7 @@ typedef struct
    int latest_ping;
    unsigned server_port_deferred;
    unsigned connect_attempt;
+   uint8_t relay_fallback;
    uint8_t flags;
    char server_address_deferred[256];
    char server_session_deferred[32];

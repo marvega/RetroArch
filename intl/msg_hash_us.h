@@ -32683,6 +32683,10 @@ MSG_HASH(
    "Retrying netplay connection (%u/%u)..."
    )
 MSG_HASH(
+   MSG_NETPLAY_RELAY_FALLBACK,
+   "No direct connection from the internet. Hosting through the relay server."
+   )
+MSG_HASH(
    MSG_NETPLAY_UNSUPPORTED,
    "Core does not support netplay."
    )
