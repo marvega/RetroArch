@@ -58,6 +58,12 @@
 #define RETRO_DEVICE_NETPLAY_KEYBOARD RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_KEYBOARD, 65535)
 
 #define NETPLAY_MAX_STALL_FRAMES        60
+/* Savestate ring budget: large states shrink the stall window to fit. */
+#ifndef NETPLAY_STATE_BUFFER_BUDGET
+#define NETPLAY_STATE_BUFFER_BUDGET     (256 * 1024 * 1024)
+#endif
+/* Smallest stall window over the input latency: ~133 ms of network delay. */
+#define NETPLAY_MIN_STALL_FRAMES        8
 #define NETPLAY_FRAME_RUN_TIME_WINDOW   120
 #define NETPLAY_MAX_REQ_STALL_TIME      60
 #define NETPLAY_MAX_REQ_STALL_FREQUENCY 120
@@ -560,6 +566,8 @@ struct netplay
 
    size_t connections_size;
    size_t buffer_size;
+   /* How far ahead of the remote input we may run (<= NETPLAY_MAX_STALL_FRAMES) */
+   uint32_t stall_frames;
    size_t zbuffer_size;
    /* The size of our packet buffers */
    size_t packet_buffer_size;
