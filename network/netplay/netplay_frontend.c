@@ -7689,12 +7689,62 @@ bool netplay_wait_and_init_serialization(netplay_t *netplay)
    return false;
 }
 
+/**
+ * netplay_stall_frames_for_state
+ *
+ * Stall window that keeps the savestate ring within
+ * NETPLAY_STATE_BUFFER_BUDGET. Small states keep NETPLAY_MAX_STALL_FRAMES.
+ * The window never drops below the input latency plus
+ * NETPLAY_MIN_STALL_FRAMES, since input latency frames count against it.
+ */
+static uint32_t netplay_stall_frames_for_state(netplay_t *netplay,
+      size_t state_size)
+{
+   const settings_t *settings = config_get_ptr();
+   size_t slots;
+   uint32_t frames, min_frames;
+
+   if (!state_size)
+      return NETPLAY_MAX_STALL_FRAMES;
+
+   slots = NETPLAY_STATE_BUFFER_BUDGET / state_size;
+   if ((netplay->flags & NETPLAY_FLAG_IS_SERVER))
+      slots /= 2;
+   frames = (slots > NETPLAY_MAX_STALL_FRAMES + 2)
+      ? NETPLAY_MAX_STALL_FRAMES
+      : (slots > 2 ? (uint32_t)(slots - 2) : 0);
+   if (frames >= NETPLAY_MAX_STALL_FRAMES)
+      return NETPLAY_MAX_STALL_FRAMES;
+
+   /* Clients only learn the host's latency later; use the local setting. */
+   min_frames = NETPLAY_MIN_STALL_FRAMES
+      + settings->uints.netplay_input_latency_frames_min
+      + settings->uints.netplay_input_latency_frames_range;
+   if (min_frames > NETPLAY_MAX_STALL_FRAMES)
+      min_frames = NETPLAY_MAX_STALL_FRAMES;
+   if (frames < min_frames)
+      frames = min_frames;
+
+   RARCH_LOG("[Netplay] Savestate of %u bytes: stall window %u frames.\n",
+         (unsigned)state_size, frames);
+   return frames;
+}
+
 static bool netplay_init_buffers(netplay_t *netplay)
 {
-   /* Enough to get ahead or behind by MAX_STALL_FRAMES frames,
+   size_t state_size = 0;
+
+   /* Quirky cores report their size late: they keep the full window. */
+   if (     netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE
+         && !(netplay->quirks & NETPLAY_QUIRK_INITIALIZATION))
+      state_size = core_serialize_size_special();
+   netplay->stall_frames = netplay_stall_frames_for_state(netplay,
+         state_size);
+
+   /* Enough to get ahead or behind by stall_frames frames,
       plus one for other remote clients,
       plus one to send the stall message. */
-   netplay->buffer_size = NETPLAY_MAX_STALL_FRAMES + 2;
+   netplay->buffer_size = netplay->stall_frames + 2;
 
    /* If we're the server,
       we need enough to get ahead AND behind by MAX_STALL_FRAMES frame. */
@@ -8741,7 +8791,7 @@ static bool netplay_poll(netplay_t *netplay, bool block_libretro_input)
    switch (netplay->stall)
    {
       case NETPLAY_STALL_RUNNING_FAST:
-         if ((netplay->unread_frame_count + NETPLAY_MAX_STALL_FRAMES - 2) >
+         if ((netplay->unread_frame_count + netplay->stall_frames - 2) >
                netplay->self_frame_count)
          {
             struct netplay_connection *connection;
@@ -8816,10 +8866,10 @@ static bool netplay_poll(netplay_t *netplay, bool block_libretro_input)
 
       /* Are we too far ahead? */
       if (netplay->stall == NETPLAY_STALL_NONE &&
-            netplay->self_frame_count >= NETPLAY_MAX_STALL_FRAMES)
+            netplay->self_frame_count >= netplay->stall_frames)
       {
          uint32_t min_frame_count = netplay->self_frame_count -
-            NETPLAY_MAX_STALL_FRAMES;
+            netplay->stall_frames;
 
          if (netplay->unread_frame_count <= min_frame_count)
          {
